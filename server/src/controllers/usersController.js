@@ -4,7 +4,6 @@
 import { prisma } from '../lib/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { validateProfileUpdate } from '../utils/validators.js';
-import { cloudinaryService } from '../services/cloudinaryService.js';
 
 // ── GET /api/users/:id — Public freelancer/user profile ──────────────────────
 export const getUserProfile = async (req, res, next) => {
@@ -63,15 +62,7 @@ export const getUserProfile = async (req, res, next) => {
 // ── PUT /api/users/me — Update own profile ────────────────────────────────────
 export const updateMyProfile = async (req, res, next) => {
   try {
-    const {
-      name,
-      bio,
-      skills,
-      hourlyRate,
-      location,
-      availability,
-      email,
-    } = req.body;
+    const { name, bio, skills, hourlyRate, location, availability, email } = req.body;
 
     validateProfileUpdate({ email, hourlyRate });
 
@@ -83,7 +74,6 @@ export const updateMyProfile = async (req, res, next) => {
     if (location !== undefined) updateData.location = location.trim();
     if (availability !== undefined) updateData.availability = Boolean(availability);
     if (email !== undefined) {
-      // Ensure new email is not taken by another user
       const conflict = await prisma.user.findFirst({
         where: { email: email.toLowerCase(), NOT: { id: req.user.id } },
       });
@@ -107,16 +97,15 @@ export const updateMyProfile = async (req, res, next) => {
   }
 };
 
-// ── POST /api/users/me/avatar — Upload avatar via Cloudinary ─────────────────
+// ── POST /api/users/me/avatar — Upload avatar (multer-storage-cloudinary handles upload)
 export const uploadAvatar = async (req, res, next) => {
   try {
     if (!req.file) throw new AppError('No file uploaded.', 400);
 
-    const result = await cloudinaryService.uploadAvatar(req.file.path, req.user.id);
-
+    // multer-storage-cloudinary sets req.file.path = secure Cloudinary URL
     const user = await prisma.user.update({
       where: { id: req.user.id },
-      data: { avatarUrl: result.secure_url },
+      data: { avatarUrl: req.file.path },
       select: { id: true, name: true, avatarUrl: true },
     });
 
@@ -129,16 +118,7 @@ export const uploadAvatar = async (req, res, next) => {
 // ── GET /api/users — Browse freelancers (public) ──────────────────────────────
 export const listFreelancers = async (req, res, next) => {
   try {
-    const {
-      page = 1,
-      limit = 20,
-      skill,
-      minRate,
-      maxRate,
-      available,
-      search,
-    } = req.query;
-
+    const { page = 1, limit = 20, skill, minRate, maxRate, available, search } = req.query;
     const skip = (parseInt(page) - 1) * parseInt(limit);
 
     const where = { role: 'FREELANCER' };
@@ -193,11 +173,8 @@ export const addPortfolioItem = async (req, res, next) => {
     const { title, description, projectUrl } = req.body;
     if (!title?.trim()) throw new AppError('Title is required.', 400);
 
-    let imageUrl = null;
-    if (req.file) {
-      const result = await cloudinaryService.uploadPortfolioImage(req.file.path, req.user.id);
-      imageUrl = result.secure_url;
-    }
+    // multer-storage-cloudinary sets req.file.path = secure Cloudinary URL
+    const imageUrl = req.file ? req.file.path : null;
 
     const item = await prisma.portfolioItem.create({
       data: {
