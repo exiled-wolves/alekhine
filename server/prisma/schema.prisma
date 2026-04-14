@@ -1,0 +1,230 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider  = "postgresql"
+  url       = env("DATABASE_URL")
+  directUrl = env("DIRECT_URL")
+}
+
+// ─── ENUMS ────────────────────────────────────────────────────────────────────
+
+enum Role {
+  CLIENT
+  FREELANCER
+  ADMIN
+}
+
+enum SubscriptionPlan {
+  FREE
+  PREMIUM
+}
+
+enum JobStatus {
+  OPEN
+  IN_PROGRESS
+  COMPLETED
+  CANCELLED
+}
+
+enum BudgetType {
+  FIXED
+  HOURLY
+}
+
+enum BidStatus {
+  PENDING
+  ACCEPTED
+  REJECTED
+}
+
+enum ContractStatus {
+  ACTIVE
+  COMPLETED
+  DISPUTED
+  CANCELLED
+}
+
+enum TransactionType {
+  CREDIT
+  DEBIT
+  ESCROW_HOLD
+  ESCROW_RELEASE
+  WITHDRAWAL
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  CANCELLED
+  PAST_DUE
+}
+
+// ─── MODELS ───────────────────────────────────────────────────────────────────
+
+model User {
+  id               String           @id @default(uuid())
+  name             String
+  email            String           @unique
+  passwordHash     String
+  role             Role
+  avatarUrl        String?
+  bio              String?
+  skills           String[]
+  hourlyRate       Float?
+  location         String?
+  availability     Boolean          @default(true)
+  subscriptionPlan SubscriptionPlan @default(FREE)
+  isVerified       Boolean          @default(false)
+  createdAt        DateTime         @default(now())
+  updatedAt        DateTime         @updatedAt
+
+  // Relations
+  wallet              Wallet?
+  jobsPosted          Job[]          @relation("ClientJobs")
+  bids                Bid[]          @relation("FreelancerBids")
+  contractsAsClient   Contract[]     @relation("ClientContracts")
+  contractsAsFreelancer Contract[]   @relation("FreelancerContracts")
+  reviewsGiven        Review[]       @relation("ReviewsGiven")
+  reviewsReceived     Review[]       @relation("ReviewsReceived")
+  portfolioItems      PortfolioItem[]
+  subscriptions       Subscription[]
+
+  @@map("users")
+}
+
+model Job {
+  id           String     @id @default(uuid())
+  clientId     String
+  title        String
+  description  String
+  category     String
+  skills       String[]
+  budgetType   BudgetType
+  budgetAmount Float
+  deadline     DateTime?
+  status       JobStatus  @default(OPEN)
+  createdAt    DateTime   @default(now())
+  updatedAt    DateTime   @updatedAt
+
+  // Relations
+  client    User       @relation("ClientJobs", fields: [clientId], references: [id])
+  bids      Bid[]
+  contracts Contract[]
+
+  @@map("jobs")
+}
+
+model Bid {
+  id            String    @id @default(uuid())
+  jobId         String
+  freelancerId  String
+  proposedPrice Float
+  coverLetter   String
+  estimatedDays Int
+  status        BidStatus @default(PENDING)
+  createdAt     DateTime  @default(now())
+  updatedAt     DateTime  @updatedAt
+
+  // Relations
+  job        Job  @relation(fields: [jobId], references: [id])
+  freelancer User @relation("FreelancerBids", fields: [freelancerId], references: [id])
+
+  @@unique([jobId, freelancerId])
+  @@map("bids")
+}
+
+model Contract {
+  id           String         @id @default(uuid())
+  jobId        String
+  clientId     String
+  freelancerId String
+  agreedPrice  Float
+  commission   Float
+  status       ContractStatus @default(ACTIVE)
+  startedAt    DateTime       @default(now())
+  completedAt  DateTime?
+
+  // Relations
+  job        Job     @relation(fields: [jobId], references: [id])
+  client     User    @relation("ClientContracts", fields: [clientId], references: [id])
+  freelancer User    @relation("FreelancerContracts", fields: [freelancerId], references: [id])
+  review     Review?
+
+  @@map("contracts")
+}
+
+model Wallet {
+  id        String   @id @default(uuid())
+  userId    String   @unique
+  balance   Float    @default(0)
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  // Relations
+  user         User          @relation(fields: [userId], references: [id])
+  transactions Transaction[]
+
+  @@map("wallets")
+}
+
+model Transaction {
+  id        String          @id @default(uuid())
+  walletId  String
+  type      TransactionType
+  amount    Float
+  reference String?
+  createdAt DateTime        @default(now())
+
+  // Relations
+  wallet Wallet @relation(fields: [walletId], references: [id])
+
+  @@map("transactions")
+}
+
+model Review {
+  id           String   @id @default(uuid())
+  contractId   String   @unique
+  clientId     String
+  freelancerId String
+  rating       Int
+  comment      String?
+  createdAt    DateTime @default(now())
+
+  // Relations
+  contract   Contract @relation(fields: [contractId], references: [id])
+  client     User     @relation("ReviewsGiven", fields: [clientId], references: [id])
+  freelancer User     @relation("ReviewsReceived", fields: [freelancerId], references: [id])
+
+  @@map("reviews")
+}
+
+model Subscription {
+  id                   String             @id @default(uuid())
+  userId               String
+  plan                 SubscriptionPlan
+  stripeSubscriptionId String?
+  status               SubscriptionStatus @default(ACTIVE)
+  startedAt            DateTime           @default(now())
+  expiresAt            DateTime?
+
+  // Relations
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("subscriptions")
+}
+
+model PortfolioItem {
+  id          String   @id @default(uuid())
+  userId      String
+  title       String
+  description String?
+  imageUrl    String?
+  projectUrl  String?
+  createdAt   DateTime @default(now())
+
+  // Relations
+  user User @relation(fields: [userId], references: [id])
+
+  @@map("portfolio_items")
+}
