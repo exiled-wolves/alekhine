@@ -32,6 +32,19 @@ app.use(
   })
 );
 
+// ─── STRIPE WEBHOOK ROUTES (raw body — MUST be before express.json()) ────────
+// Stripe requires the raw request body for signature verification.
+// express.json() would parse and destroy it, so these routes must be
+// registered first using express.raw().
+app.use(
+  '/api/wallet/topup/webhook',
+  express.raw({ type: 'application/json' })
+);
+app.use(
+  '/api/subscriptions/webhook',
+  express.raw({ type: 'application/json' })
+);
+
 // ─── GENERAL MIDDLEWARE ───────────────────────────────────────────────────────
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));

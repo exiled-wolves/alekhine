@@ -65,46 +65,35 @@ export const stripeService = {
   },
 
   // ── Freelancer payout via Stripe Connect ─────────────────────────────────────
-  // NOTE: Requires Stripe Connect onboarding for the freelancer.
-  // In production, create a Connected Account per freelancer during profile setup.
-  // For MVP, this creates a simple Transfer to a connected account.
-  createPayout: async ({ userId, email, amount }) => {
-    const amountInCents = Math.round(amount * 100);
-
-    // Look up the Stripe Connect account for this user
-    // In production, store stripeAccountId on the User model
-    // For now, search by metadata
-    const accounts = await stripe.accounts.list({ limit: 100 });
-    const account = accounts.data.find(
-      (a) => a.metadata?.userId === userId
-    );
-
-    if (!account) {
+  // Requires the freelancer to have completed Connect onboarding.
+  // stripeAccountId is stored on the User record after onboarding.
+  createPayout: async ({ stripeAccountId, amount }) => {
+    if (!stripeAccountId) {
       throw new AppError(
         'No connected payout account found. Please complete Stripe Connect onboarding in your profile settings.',
         400
       );
     }
 
+    const amountInCents = Math.round(amount * 100);
+
     const transfer = await stripe.transfers.create({
       amount: amountInCents,
       currency: 'usd',
-      destination: account.id,
-      metadata: { userId },
+      destination: stripeAccountId,
     });
 
     return transfer;
   },
 
   // ── Create a Stripe Connect onboarding link ───────────────────────────────────
-  createConnectAccountLink: async (userId, email) => {
+  // Pass existingAccountId if the user already has a Stripe account (stored in DB).
+  createConnectAccountLink: async (userId, email, existingAccountId = null) => {
     let account;
 
-    // Check if account already exists
-    const existing = await stripe.accounts.list({ limit: 100 });
-    account = existing.data.find((a) => a.metadata?.userId === userId);
-
-    if (!account) {
+    if (existingAccountId) {
+      account = await stripe.accounts.retrieve(existingAccountId);
+    } else {
       account = await stripe.accounts.create({
         type: 'express',
         email,

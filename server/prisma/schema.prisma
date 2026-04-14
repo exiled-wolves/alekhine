@@ -74,10 +74,11 @@ model User {
   hourlyRate       Float?
   location         String?
   availability     Boolean          @default(true)
-  subscriptionPlan SubscriptionPlan @default(FREE)
-  isVerified       Boolean          @default(false)
-  createdAt        DateTime         @default(now())
-  updatedAt        DateTime         @updatedAt
+  subscriptionPlan   SubscriptionPlan @default(FREE)
+  isVerified         Boolean          @default(false)
+  stripeAccountId    String?          // Stripe Connect account ID for payouts (freelancers)
+  createdAt          DateTime         @default(now())
+  updatedAt          DateTime         @updatedAt
 
   // Relations
   wallet              Wallet?

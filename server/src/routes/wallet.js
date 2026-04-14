@@ -16,21 +16,9 @@ const router = Router();
 router.get('/me', protect, getMyWallet);
 router.post('/topup', protect, topUp);
 // Stripe webhook — must NOT use protect (Stripe calls this, not the user).
-// Raw body is captured here for signature verification.
-router.post(
-  '/topup/webhook',
-  (req, res, next) => {
-    if (req.headers['stripe-signature']) {
-      let data = '';
-      req.setEncoding('utf8');
-      req.on('data', (chunk) => { data += chunk; });
-      req.on('end', () => { req.body = data; next(); });
-    } else {
-      next();
-    }
-  },
-  confirmTopUp,
-);
+// express.raw() is applied to this path in index.js (before express.json)
+// so req.body arrives as a Buffer, which stripe.webhooks.constructEvent needs.
+router.post('/topup/webhook', confirmTopUp);
 router.post('/withdraw', protect, allowRoles('FREELANCER', 'ADMIN'), withdraw);
 
 // Stripe Connect onboarding — freelancers must complete this before withdrawals work
