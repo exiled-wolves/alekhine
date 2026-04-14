@@ -3,9 +3,10 @@
 
 export class ValidationError extends Error {
   constructor(errors) {
-    super('Validation failed');
+    super(errors.map((e) => e.message).join('; '));
     this.name = 'ValidationError';
     this.statusCode = 400;
+    this.isOperational = true; // marks this as a known, safe error (won't leak stack in prod)
     this.errors = errors; // array of { field, message }
   }
 }

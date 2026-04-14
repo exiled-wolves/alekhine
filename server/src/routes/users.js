@@ -55,12 +55,15 @@ const uploadPortfolio = multer({ storage: portfolioStorage, limits: { fileSize: 
 
 // ── Public routes ─────────────────────────────────────────────────────────────
 router.get('/', listFreelancers);
-router.get('/:id', getUserProfile);
 
-// ── Authenticated routes ───────────────────────────────────────────────────────
+// ── Authenticated /me routes — MUST come before /:id to prevent "me" being
+//    treated as a user ID by Express's pattern matching ──────────────────────
 router.put('/me', protect, updateMyProfile);
 router.post('/me/avatar', protect, uploadAvatar_.single('avatar'), uploadAvatar);
 router.post('/me/portfolio', protect, uploadPortfolio.single('image'), addPortfolioItem);
 router.delete('/me/portfolio/:itemId', protect, removePortfolioItem);
+
+// ── Dynamic param route — always last ─────────────────────────────────────────
+router.get('/:id', getUserProfile);
 
 export default router;

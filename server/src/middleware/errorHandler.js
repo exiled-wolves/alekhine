@@ -56,17 +56,18 @@ const sendErrorDev = (err, res) => {
 
 const sendErrorProd = (err, res) => {
   if (err.isOperational) {
-    // Known, safe error — send message to client
-    res.status(err.statusCode).json({
-      status: "error",
-      message: err.message,
-    });
+    const body = { status: 'error', message: err.message };
+    // Surface field-level validation errors to the client
+    if (err.name === 'ValidationError' && err.errors?.length) {
+      body.errors = err.errors;
+    }
+    res.status(err.statusCode).json(body);
   } else {
     // Unknown error — don't leak details
-    console.error("UNEXPECTED ERROR:", err);
+    console.error('UNEXPECTED ERROR:', err);
     res.status(500).json({
-      status: "error",
-      message: "Something went wrong. Please try again later.",
+      status: 'error',
+      message: 'Something went wrong. Please try again later.',
     });
   }
 };

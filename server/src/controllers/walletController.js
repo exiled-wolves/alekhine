@@ -76,9 +76,26 @@ export const topUp = async (req, res, next) => {
   }
 };
 
-// ── POST /api/wallet/topup/confirm — Stripe webhook confirms payment ──────────
-// Called by Stripe webhook (not directly by users — handled in subscriptions webhook route)
-// This endpoint allows manual confirmation during development/testing
+// ── POST /api/wallet/connect/onboard — Freelancer Stripe Connect onboarding ───
+// Freelancers must complete Connect onboarding before they can withdraw earnings.
+export const getStripeConnectLink = async (req, res, next) => {
+  try {
+    const { url, accountId } = await stripeService.createConnectAccountLink(
+      req.user.id,
+      req.user.email
+    );
+
+    res.status(200).json({
+      status: 'success',
+      data: { onboardingUrl: url, accountId },
+    });
+  } catch (err) {
+    next(err);
+  }
+};
+
+// ── POST /api/wallet/topup/webhook — Stripe webhook confirms wallet top-up ────
+// Called by Stripe — NOT by the user directly. No auth middleware used.
 export const confirmTopUp = async (req, res, next) => {
   try {
     const sig = req.headers['stripe-signature'];
