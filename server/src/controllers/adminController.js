@@ -3,6 +3,7 @@
 
 import { prisma } from '../lib/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
+import { emailService } from '../services/emailService.js';
 
 // ── GET /api/admin/stats — Platform overview stats ────────────────────────────
 export const getStats = async (req, res, next) => {
@@ -10,7 +11,7 @@ export const getStats = async (req, res, next) => {
     const [
       totalUsers,
       totalClients,
-      totalFrerelancers,
+      totalFreelancers,
       totalJobs,
       openJobs,
       totalContracts,
@@ -31,7 +32,6 @@ export const getStats = async (req, res, next) => {
       prisma.review.count(),
     ]);
 
-    // Total platform revenue (sum of commissions on completed contracts)
     const revenueAgg = await prisma.contract.aggregate({
       where: { status: 'COMPLETED' },
       _sum: { commission: true },
@@ -40,7 +40,7 @@ export const getStats = async (req, res, next) => {
     res.status(200).json({
       status: 'success',
       data: {
-        users: { total: totalUsers, clients: totalClients, freelancers: totalFrerelancers },
+        users: { total: totalUsers, clients: totalClients, freelancers: totalFreelancers },
         jobs: { total: totalJobs, open: openJobs },
         contracts: {
           total: totalContracts,
@@ -134,7 +134,6 @@ export const deleteUser = async (req, res, next) => {
     if (!user) throw new AppError('User not found.', 404);
     if (user.role === 'ADMIN') throw new AppError('Cannot delete an admin account.', 403);
 
-    // Check for active contracts before deleting
     const activeContracts = await prisma.contract.count({
       where: {
         OR: [{ clientId: req.params.id }, { freelancerId: req.params.id }],
@@ -234,7 +233,9 @@ export const resolveDispute = async (req, res, next) => {
     const contract = await prisma.contract.findUnique({
       where: { id: req.params.id },
       include: {
-        freelancer: { select: { id: true, subscriptionPlan: true } },
+        client: { select: { id: true, name: true, email: true } },
+        freelancer: { select: { id: true, name: true, email: true, subscriptionPlan: true } },
+        job: { select: { id: true, title: true } },
       },
     });
 
@@ -245,7 +246,6 @@ export const resolveDispute = async (req, res, next) => {
 
     const updated = await prisma.$transaction(async (tx) => {
       if (resolution === 'release') {
-        // Release escrow to freelancer (minus commission)
         const commissionRate =
           contract.freelancer.subscriptionPlan === 'PREMIUM' ? 0.05 : 0.10;
         const commissionAmount = parseFloat((contract.agreedPrice * commissionRate).toFixed(2));
@@ -269,7 +269,6 @@ export const resolveDispute = async (req, res, next) => {
           },
         });
       } else {
-        // Refund escrow to client
         const clientWallet = await tx.wallet.findUnique({
           where: { userId: contract.clientId },
         });
@@ -289,7 +288,6 @@ export const resolveDispute = async (req, res, next) => {
         });
       }
 
-      // Mark job cancelled if refund, completed if release
       await tx.job.update({
         where: { id: contract.jobId },
         data: { status: resolution === 'release' ? 'COMPLETED' : 'CANCELLED' },
@@ -307,6 +305,21 @@ export const resolveDispute = async (req, res, next) => {
         },
       });
     });
+
+    // Notify both parties (fire-and-forget)
+    emailService.sendDisputeResolved({
+      to: contract.client.email,
+      name: contract.client.name,
+      jobTitle: contract.job.title,
+      resolution,
+    }).catch(() => {});
+
+    emailService.sendDisputeResolved({
+      to: contract.freelancer.email,
+      name: contract.freelancer.name,
+      jobTitle: contract.job.title,
+      resolution,
+    }).catch(() => {});
 
     res.status(200).json({
       status: 'success',

@@ -4,6 +4,7 @@
 import { prisma } from '../lib/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { COMMISSION } from '../utils/constants.js';
+import { emailService } from '../services/emailService.js';
 
 // ── GET /api/contracts/my — Get current user's contracts ─────────────────────
 export const getMyContracts = async (req, res, next) => {
@@ -61,7 +62,6 @@ export const getContract = async (req, res, next) => {
 
     if (!contract) throw new AppError('Contract not found.', 404);
 
-    // Only involved parties or admin can view
     const isParty =
       contract.clientId === req.user.id || contract.freelancerId === req.user.id;
     if (!isParty && req.user.role !== 'ADMIN') {
@@ -75,12 +75,15 @@ export const getContract = async (req, res, next) => {
 };
 
 // ── POST /api/contracts/:id/complete — Client marks contract as complete ──────
-// This releases escrow: platform takes commission, remainder goes to freelancer
+// Releases escrow: platform takes commission, remainder goes to freelancer wallet
 export const completeContract = async (req, res, next) => {
   try {
     const contract = await prisma.contract.findUnique({
       where: { id: req.params.id },
-      include: { freelancer: { select: { id: true, subscriptionPlan: true } } },
+      include: {
+        freelancer: { select: { id: true, name: true, email: true, subscriptionPlan: true } },
+        job: { select: { id: true, title: true } },
+      },
     });
 
     if (!contract) throw new AppError('Contract not found.', 404);
@@ -137,6 +140,14 @@ export const completeContract = async (req, res, next) => {
       return updated;
     });
 
+    // Notify the freelancer (fire-and-forget)
+    emailService.sendContractCompleted({
+      to: contract.freelancer.email,
+      freelancerName: contract.freelancer.name,
+      jobTitle: contract.job.title,
+      payout: freelancerPayout,
+    }).catch(() => {});
+
     res.status(200).json({
       status: 'success',
       message: `Contract completed. $${freelancerPayout} released to freelancer (commission: $${commissionAmount}).`,
@@ -150,7 +161,14 @@ export const completeContract = async (req, res, next) => {
 // ── POST /api/contracts/:id/dispute — Either party raises a dispute ───────────
 export const disputeContract = async (req, res, next) => {
   try {
-    const contract = await prisma.contract.findUnique({ where: { id: req.params.id } });
+    const contract = await prisma.contract.findUnique({
+      where: { id: req.params.id },
+      include: {
+        client: { select: { id: true, name: true, email: true } },
+        freelancer: { select: { id: true, name: true, email: true } },
+        job: { select: { id: true, title: true } },
+      },
+    });
     if (!contract) throw new AppError('Contract not found.', 404);
 
     const isParty =
@@ -171,6 +189,21 @@ export const disputeContract = async (req, res, next) => {
         freelancer: { select: { id: true, name: true } },
       },
     });
+
+    // Notify both parties (fire-and-forget)
+    emailService.sendDisputeRaised({
+      to: contract.client.email,
+      name: contract.client.name,
+      jobTitle: contract.job.title,
+      contractId: contract.id,
+    }).catch(() => {});
+
+    emailService.sendDisputeRaised({
+      to: contract.freelancer.email,
+      name: contract.freelancer.name,
+      jobTitle: contract.job.title,
+      contractId: contract.id,
+    }).catch(() => {});
 
     res.status(200).json({
       status: 'success',

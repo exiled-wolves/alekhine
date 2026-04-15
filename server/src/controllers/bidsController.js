@@ -5,6 +5,7 @@ import { prisma } from '../lib/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { validateBid } from '../utils/validators.js';
 import { COMMISSION } from '../utils/constants.js';
+import { emailService } from '../services/emailService.js';
 
 // ── POST /api/jobs/:id/bids — Freelancer submits a bid ───────────────────────
 export const submitBid = async (req, res, next) => {
@@ -12,7 +13,10 @@ export const submitBid = async (req, res, next) => {
     const { proposedPrice, coverLetter, estimatedDays } = req.body;
     validateBid({ proposedPrice, coverLetter, estimatedDays });
 
-    const job = await prisma.job.findUnique({ where: { id: req.params.id } });
+    const job = await prisma.job.findUnique({
+      where: { id: req.params.id },
+      include: { client: { select: { id: true, name: true, email: true } } },
+    });
     if (!job) throw new AppError('Job not found.', 404);
     if (job.status !== 'OPEN') throw new AppError('This job is no longer accepting bids.', 400);
     if (job.clientId === req.user.id) throw new AppError('You cannot bid on your own job.', 400);
@@ -40,6 +44,15 @@ export const submitBid = async (req, res, next) => {
         },
       },
     });
+
+    // Count total bids now and notify the client
+    const bidCount = await prisma.bid.count({ where: { jobId: job.id } });
+    emailService.sendNewBidReceived({
+      to: job.client.email,
+      clientName: job.client.name,
+      jobTitle: job.title,
+      bidCount,
+    }).catch(() => {}); // fire-and-forget — email failures must never block the response
 
     res.status(201).json({ status: 'success', data: { bid } });
   } catch (err) {
@@ -118,10 +131,16 @@ export const acceptBid = async (req, res, next) => {
     // Determine commission rate based on freelancer's plan
     const freelancer = await prisma.user.findUnique({
       where: { id: bid.freelancerId },
-      select: { subscriptionPlan: true },
+      select: { subscriptionPlan: true, name: true, email: true },
     });
     const commissionRate = COMMISSION[freelancer.subscriptionPlan] ?? COMMISSION.FREE;
     const commissionAmount = parseFloat((bid.proposedPrice * commissionRate).toFixed(2));
+
+    // Fetch rejected freelancers' contact info for notifications
+    const rejectedBids = await prisma.bid.findMany({
+      where: { jobId: bid.jobId, id: { not: bid.id }, status: 'PENDING' },
+      include: { freelancer: { select: { name: true, email: true } } },
+    });
 
     // Atomic transaction:
     // 1. Accept this bid
@@ -130,16 +149,13 @@ export const acceptBid = async (req, res, next) => {
     // 4. Move job to IN_PROGRESS
     // 5. Debit client wallet to escrow (hold funds)
     const [contract] = await prisma.$transaction(async (tx) => {
-      // Accept this bid
       await tx.bid.update({ where: { id: bid.id }, data: { status: 'ACCEPTED' } });
 
-      // Reject all other pending bids
       await tx.bid.updateMany({
         where: { jobId: bid.jobId, id: { not: bid.id }, status: 'PENDING' },
         data: { status: 'REJECTED' },
       });
 
-      // Create contract
       const contract = await tx.contract.create({
         data: {
           jobId: bid.jobId,
@@ -155,10 +171,8 @@ export const acceptBid = async (req, res, next) => {
         },
       });
 
-      // Move job to IN_PROGRESS
       await tx.job.update({ where: { id: bid.jobId }, data: { status: 'IN_PROGRESS' } });
 
-      // Escrow: debit client wallet
       const clientWallet = await tx.wallet.findUnique({
         where: { userId: bid.job.clientId },
       });
@@ -182,6 +196,24 @@ export const acceptBid = async (req, res, next) => {
 
       return [contract];
     });
+
+    // ── Email notifications (fire-and-forget) ──────────────────────────────────
+    // Notify the accepted freelancer
+    emailService.sendBidAccepted({
+      to: freelancer.email,
+      freelancerName: freelancer.name,
+      jobTitle: bid.job.title,
+      agreedPrice: bid.proposedPrice,
+    }).catch(() => {});
+
+    // Notify all rejected freelancers
+    for (const rejected of rejectedBids) {
+      emailService.sendBidRejected({
+        to: rejected.freelancer.email,
+        freelancerName: rejected.freelancer.name,
+        jobTitle: bid.job.title,
+      }).catch(() => {});
+    }
 
     res.status(201).json({
       status: 'success',

@@ -60,7 +60,6 @@ export const topUp = async (req, res, next) => {
       throw new AppError('Maximum single top-up is $10,000.', 400);
     }
 
-    // Create Stripe Checkout Session
     const session = await stripeService.createTopUpSession({
       userId: req.user.id,
       email: req.user.email,
@@ -78,12 +77,29 @@ export const topUp = async (req, res, next) => {
 
 // ── POST /api/wallet/connect/onboard — Freelancer Stripe Connect onboarding ───
 // Freelancers must complete Connect onboarding before they can withdraw earnings.
+// On first call: creates a Stripe Express account and saves accountId to DB.
+// On subsequent calls: retrieves the existing account and returns a fresh link.
 export const getStripeConnectLink = async (req, res, next) => {
   try {
+    // Fetch full user record to check for existing Stripe account
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { id: true, email: true, stripeAccountId: true },
+    });
+
     const { url, accountId } = await stripeService.createConnectAccountLink(
-      req.user.id,
-      req.user.email
+      user.id,
+      user.email,
+      user.stripeAccountId ?? null  // pass existing ID if present
     );
+
+    // Persist the Stripe account ID so future payouts can reference it
+    if (!user.stripeAccountId || user.stripeAccountId !== accountId) {
+      await prisma.user.update({
+        where: { id: user.id },
+        data: { stripeAccountId: accountId },
+      });
+    }
 
     res.status(200).json({
       status: 'success',
@@ -151,6 +167,19 @@ export const withdraw = async (req, res, next) => {
       throw new AppError('Minimum withdrawal amount is $10.', 400);
     }
 
+    // Fetch full user to get stripeAccountId
+    const user = await prisma.user.findUnique({
+      where: { id: req.user.id },
+      select: { id: true, stripeAccountId: true },
+    });
+
+    if (!user.stripeAccountId) {
+      throw new AppError(
+        'You must complete Stripe Connect onboarding before withdrawing. Go to Settings → Payout Account.',
+        400
+      );
+    }
+
     const wallet = await prisma.wallet.findUnique({ where: { userId: req.user.id } });
     if (!wallet) throw new AppError('Wallet not found.', 404);
     if (wallet.balance < parsed) {
@@ -160,10 +189,9 @@ export const withdraw = async (req, res, next) => {
       );
     }
 
-    // Initiate Stripe Connect payout (returns transfer ID)
+    // Initiate Stripe Connect transfer using the stored account ID
     const transfer = await stripeService.createPayout({
-      userId: req.user.id,
-      email: req.user.email,
+      stripeAccountId: user.stripeAccountId,
       amount: parsed,
     });
 

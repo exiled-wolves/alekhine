@@ -8,6 +8,7 @@ import { prisma } from '../lib/prisma.js';
 import { AppError } from '../middleware/errorHandler.js';
 import { validateRegister, validateLogin } from '../utils/validators.js';
 import { COOKIE_OPTIONS } from '../utils/constants.js';
+import { emailService } from '../services/emailService.js';
 
 const signToken = (userId) =>
   jwt.sign({ userId }, process.env.JWT_SECRET, {
@@ -20,11 +21,9 @@ export const register = async (req, res, next) => {
     const { name, email, password, role } = req.body;
     validateRegister({ name, email, password, role });
 
-    // Check for existing user
     const existing = await prisma.user.findUnique({ where: { email: email.toLowerCase() } });
     if (existing) throw new AppError('An account with that email already exists.', 409);
 
-    // Hash password
     const passwordHash = await bcrypt.hash(password, 12);
 
     // Create user + wallet in a single transaction (Rule 2: every user gets a wallet)
@@ -46,6 +45,9 @@ export const register = async (req, res, next) => {
     // Issue JWT in httpOnly cookie
     const token = signToken(user.id);
     res.cookie('token', token, COOKIE_OPTIONS);
+
+    // Send welcome email (fire-and-forget)
+    emailService.sendWelcome({ to: user.email, name: user.name }).catch(() => {});
 
     res.status(201).json({
       status: 'success',
@@ -73,7 +75,7 @@ export const login = async (req, res, next) => {
     const { email, password } = req.body;
     validateLogin({ email, password });
 
-    // Fetch user — role always comes from DB
+    // Fetch user — role always comes from DB (Rule 1)
     const user = await prisma.user.findUnique({
       where: { email: email.toLowerCase().trim() },
       include: { wallet: { select: { id: true, balance: true } } },
@@ -120,7 +122,6 @@ export const logout = (req, res) => {
 // ── GET /api/auth/me ──────────────────────────────────────────────────────────
 export const getMe = async (req, res, next) => {
   try {
-    // req.user is already populated by protect middleware
     const user = await prisma.user.findUnique({
       where: { id: req.user.id },
       select: {
@@ -136,6 +137,7 @@ export const getMe = async (req, res, next) => {
         avatarUrl: true,
         subscriptionPlan: true,
         isVerified: true,
+        stripeAccountId: true,
         createdAt: true,
         wallet: { select: { id: true, balance: true } },
         portfolioItems: {
